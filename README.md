@@ -4,14 +4,7 @@
 [ImortalWrt Firmware Selector](https://firmware-selector.immortalwrt.org/)
 这是天灵大佬的自动生成固件网站<br>
 
-例如我的设备CMCC RAX3000M nand版本
-![IFS](doc/IFS.png)
-如果你本来是有192.168.1.1后台的uboot了（能刷lede固件的）如何切换到这个固件呢？<br>
-192.168.1.1/uboot.html<br>
-192.168.1.1/bl2.html<br>
-根据上面提示自己领悟..完毕。<br>
-<br>
-**English** | [中文](https://p3terx.com/archives/build-openwrt-with-github-actions.html)
+
 
 # Actions-OpenWrt
 
