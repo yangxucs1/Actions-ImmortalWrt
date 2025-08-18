@@ -155,27 +155,15 @@ jobs:
       if: (!cancelled())
       run: df -hT
 
-    - name: 上传 bin 目录
+    - name: 上传 bin 目录、dl 目录以及 config      #不需要上传的文件目录前写"#"注释掉
       uses: actions/upload-artifact@main
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
       with:
         name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: openwrt/bin
-
-    - name: 上传 dl 目录
-      uses: actions/upload-artifact@main
-      if: env.UPLOAD_DL_DIR == 'true'
-      with:
-        name: OpenWrt_dl${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: openwrt/dl
- 
-     - name: 上传 config 
-      uses: actions/upload-artifact@main
-      if: UPLOAD_config_DIR == 'true'
-      with:
-        name: OpenWrt_config${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: ./openwrt/.config
-
+        path: 
+          openwrt/bin
+          openwrt/dl
+          ./.config
 
     - name: 整理固件文件夹
       id: organize
