@@ -7,7 +7,7 @@
 # See /LICENSE for more information.
 #
 
-name: 编译X86_64-immortalwrt固件
+name: 编译固件
 
 permissions: write-all
 #开启写权限，防止无法上传到release
