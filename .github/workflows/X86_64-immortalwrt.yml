@@ -174,7 +174,7 @@ jobs:
       if: UPLOAD_config_DIR == 'true'
       with:
         name: OpenWrt_config${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: openwrt/.config
+        path: ./openwrt/.config
 
 
     - name: 整理固件文件夹
