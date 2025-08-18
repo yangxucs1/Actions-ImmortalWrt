@@ -42,7 +42,7 @@ env:
   # 定义环境变量，修改时需要注意:(冒号)后面有空格
   FREE_DISK_SH: scripts/free_disk_space.sh
     # 清理空间脚本
-  ENV_SH: scripts/init_build_environment.sh
+  ENV_SH: scripts/environment.sh
     # 安装编译依赖工具脚本
   SETTINGS_SH: scripts/init-settings.sh
     # 自定义设置脚本，如：更改源码中路由器管理 IP 地址
