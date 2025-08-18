@@ -50,8 +50,8 @@ env:    #定义环境变量，修改时需要注意:(冒号)后面有空格
 
 jobs:
   build:
-    runs-on: ubuntu-24.04    #指定运行环境，如：ubuntu-22.04
-    
+    runs-on: ubuntu-latest
+   
     steps:
     - name: 准备
       uses: actions/checkout@main
