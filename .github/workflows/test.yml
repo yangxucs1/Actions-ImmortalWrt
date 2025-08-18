@@ -167,15 +167,7 @@ jobs:
       if: env.UPLOAD_DL_DIR == 'true'
       with:
         name: OpenWrt_dl${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: openwrt/dl
- 
-     - name: 上传 config 
-      uses: actions/upload-artifact@main
-      if: UPLOAD_config_DIR == 'true'
-      with:
-        name: OpenWrt_config${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: openwrt
-
+        path: openwrt/dl 
 
     - name: 整理固件文件夹
       id: organize
