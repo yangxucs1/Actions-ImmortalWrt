@@ -94,7 +94,6 @@ jobs:
         docker-images: true
         swap-storage: true
           # 所有这些选项都默认为"true"，但你可以根据工作流程的需要，随时将其设置为 false
-       
       run: |
         sudo -E apt-get -qq update -y
         sudo -E apt-get -qq full-upgrade -y
