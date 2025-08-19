@@ -53,7 +53,7 @@ env:
     # 源码仓库地址，通过变更仓库地址达到编译不同的固件
   REPO_BRANCH: master
     # 修改 REPO_BRANCH 来达到更改分支版本,如：openwrt-24.10
-  #CONFIG_FILE:
+  CONFIG_FILE: configs/X86.config
     # 编译配置文件路径(当前已注释掉，需启用可删除#)
   UPLOAD_BIN_DIR: true
     # 是否上传bin目录(true/false)
@@ -158,6 +158,12 @@ jobs:
     - name: 执行自定义设置（改IP地址等）
       run: |
         cd openwrt
+        [ -n "$CONFIG_FILE" && -f "$GITHUB_WORKSPACE/$CONFIG_FILE" ] && {
+          # 删除默认配置中与目标相关的项
+          sed -i '/^CONFIG_TARGET_/d' .config
+          # 追加自定义配置
+          cat "$GITHUB_WORKSPACE/$CONFIG_FILE" >> .config
+        }
         chmod +x $GITHUB_WORKSPACE/$SETTINGS_SH && $GITHUB_WORKSPACE/$SETTINGS_SH
         chmod +x $GITHUB_WORKSPACE/$CLASH_CORE_SH && $GITHUB_WORKSPACE/$CLASH_CORE_SH
 
