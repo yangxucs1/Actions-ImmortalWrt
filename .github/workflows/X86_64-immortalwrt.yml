@@ -81,12 +81,25 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
           # 禁用交互式提示，软件包安装过程使用默认配置
+
+    - name: 清理磁盘空间(Ubuntu)
+      uses: jlumbroso/free-disk-space@main
+      with:
+        tool-cache: false
+          # 如果设置为"true"，虽然可以释放约6 GB的空间，但这可能会删除实际需要的工具
+        android: true
+        dotnet: true
+        haskell: true
+        large-packages: true
+        docker-images: true
+        swap-storage: true
+          # 所有这些选项都默认为"true"，但你可以根据工作流程的需要，随时将其设置为 false
+       
       run: |
-        chmod +x $FREE_DISK_SH && $FREE_DISK_SH
-          # 赋予脚本可执行权限并运行该脚本
         sudo -E apt-get -qq update -y
         sudo -E apt-get -qq full-upgrade -y
         chmod +x $ENV_SH && $ENV_SH
+          # 赋予脚本可执行权限并运行该脚本
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
         sudo docker image prune -a -f
         sudo docker container prune -f
@@ -235,7 +248,7 @@ jobs:
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
         VERSION1="${REPO_BRANCH#*-}"
-        echo -e "🎉 X86-64 平台\n✅ ${VERSION1} 源码\n❗️ ip地址 : 192.168.123.1" >> release.txt
+        echo -e "ℹ️ X86-64 平台\n✅ ${VERSION1} 源码\n⚠️ ip地址 : 192.168.123.1" >> release.txt
         echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
         echo "status=success" >> $GITHUB_OUTPUT
 
