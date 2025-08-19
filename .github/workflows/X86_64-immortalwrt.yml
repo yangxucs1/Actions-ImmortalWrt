@@ -77,11 +77,6 @@ jobs:
     - name: 准备
       uses: actions/checkout@main
 
-    - name: 初始化编译环境
-      env:
-        DEBIAN_FRONTEND: noninteractive
-          # 禁用交互式提示，软件包安装过程使用默认配置
-
     - name: 清理磁盘空间(Ubuntu)
       uses: jlumbroso/free-disk-space@main
       with:
@@ -94,6 +89,11 @@ jobs:
         docker-images: true
         swap-storage: true
           # 所有这些选项都默认为"true"，但你可以根据工作流程的需要，随时将其设置为 false
+
+    - name: 初始化编译环境
+      env:
+        DEBIAN_FRONTEND: noninteractive
+        # 禁用交互式提示，软件包安装过程使用默认配置
       run: |
         sudo -E apt-get -qq update -y
         sudo -E apt-get -qq full-upgrade -y
@@ -102,6 +102,8 @@ jobs:
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
         sudo docker image prune -a -f
         sudo docker container prune -f
+        sudo -E apt-get -qq autoremove --purge
+        sudo -E apt-get -qq clean
         sudo timedatectl set-timezone "$TZ"
         sudo mkdir -p /workdir
           # 创建工作目录
@@ -203,7 +205,7 @@ jobs:
       run: df -hT
 
     - name: 上传 bin 目录
-        # 通过环境变量处的 "UPLOAD_BIN_DIR: " 的值控制(ture/false)
+        # 通过环境变量处的 "UPLOAD_BIN_DIR: " 的值控制(true/false)
       uses: actions/upload-artifact@main
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
       with:
@@ -211,7 +213,7 @@ jobs:
         path: openwrt/bin
 
     - name: 上传 dl 目录
-        # 通过环境变量处的 "UPLOAD_DL_DIR: " 的值控制(ture/false)
+        # 通过环境变量处的 "UPLOAD_DL_DIR: " 的值控制(true/false)
       uses: actions/upload-artifact@main
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_DL_DIR == 'true'
       with:
@@ -219,7 +221,7 @@ jobs:
         path: openwrt/dl
 
     - name: 上传 config 配置文件
-        # 通过环境变量处的 "UPLOAD_config_DIR: " 的值控制(ture/false)
+        # 通过环境变量处的 "UPLOAD_config_DIR: " 的值控制(true/false)
       uses: actions/upload-artifact@main
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_config_DIR == 'true'
       with:
