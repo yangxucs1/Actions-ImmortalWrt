@@ -55,16 +55,16 @@ env:
     # 修改 REPO_BRANCH 来达到更改分支版本,如：openwrt-24.10
   #CONFIG_FILE:
     # 编译配置文件路径(当前已注释掉，需启用可删除#)
-  UPLOAD_BIN_DIR: false
-    # 是否上传bin目录
+  UPLOAD_BIN_DIR: true
+    # 是否上传bin目录(true/false)
+  UPLOAD_DL_DIR: true
+    # 是否上传dl目录(true/false)
+  UPLOAD_config_DIR: true
+    # 是否上传.config目录(true/false)
   UPLOAD_FIRMWARE: true
-    # 是否上传最终固件
-  UPLOAD_RELEASE: false
-    # 是否将固件发布为Release
-  UPLOAD_DL_DIR: false
-    # 是否上传dl目录
-  UPLOAD_config_DIR: false
-    # 是否上传.config目录
+    # 是否上传最终固件(true/false)
+  UPLOAD_RELEASE: true
+    # 是否将固件发布为Release(true/false)
   TZ: Asia/Shanghai
     # 设置时区
 
@@ -190,16 +190,29 @@ jobs:
       if: (!cancelled())
       run: df -hT
 
-    - name: 上传 bin 目录、dl 目录以及 config
-        # 不需要上传的文件目录前写"#"注释掉
+    - name: 上传 bin 目录
+        # 通过环境变量处的 "UPLOAD_BIN_DIR: " 的值控制(ture/false)
       uses: actions/upload-artifact@main
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
       with:
         name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: 
-          openwrt/bin
-          openwrt/dl
-          ./.config
+        path: openwrt/bin
+
+    - name: 上传 dl 目录
+        # 通过环境变量处的 "UPLOAD_DL_DIR: " 的值控制(ture/false)
+      uses: actions/upload-artifact@main
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_DL_DIR == 'true'
+      with:
+        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: openwrt/dl
+
+    - name: 上传 config 配置文件
+        # 通过环境变量处的 "UPLOAD_config_DIR: " 的值控制(ture/false)
+      uses: actions/upload-artifact@main
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_config_DIR == 'true'
+      with:
+        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: ./.config
 
     - name: 整理固件文件夹
       id: organize
