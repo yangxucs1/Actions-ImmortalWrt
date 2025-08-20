@@ -158,13 +158,9 @@ jobs:
 
     - name: 执行自定义设置（改IP地址等）
       run: |
+        [ -d files ] && mv files openwrt/files || echo "files not found"
+        [ -f $CONFIG_FILE ] && cat $CONFIG_FILE >> openwrt/.config
         cd openwrt
-        [ -n "$CONFIG_FILE" && -f "$GITHUB_WORKSPACE/$CONFIG_FILE" ] && {
-          # 删除默认配置中与目标相关的项
-          sed -i '/^CONFIG_TARGET_/d' .config
-          # 追加自定义配置
-          cat "$GITHUB_WORKSPACE/$CONFIG_FILE" >> .config
-        }
         chmod +x $GITHUB_WORKSPACE/$SETTINGS_SH && $GITHUB_WORKSPACE/$SETTINGS_SH
         chmod +x $GITHUB_WORKSPACE/$CLASH_CORE_SH && $GITHUB_WORKSPACE/$CLASH_CORE_SH
 
