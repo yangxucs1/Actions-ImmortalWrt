@@ -73,7 +73,7 @@ jobs:
       matrix:
         version: [ "Lean", "Lienol", "immortalwrt" ]
           # 版本维度：三种不同的OpenWRT分支
-        target: [ "x86-64", "Newifi3-D2" ]
+        target: [ "X86-64", "Newifi3-D2" ]
           # 目标设备维度：共有3*2,6种组合
         include:
           - version: Lean
