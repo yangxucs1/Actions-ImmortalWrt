@@ -171,7 +171,7 @@ jobs:
         run: |
           [ -d files ] && mv files openwrt/files || echo "files 目录不存在"
             # 复制自定义文件
-          CONFIG_FILE="configs/${{ matrix.version }}/${{ matrix.target | replace('/','-') }}.config"
+          CONFIG_FILE="configs/${{ matrix.version }}/${{ matrix.target }}.config"
             # .config文件名与 ${{ matrix.target }} 内容一致，如：x86-64.config
             # 文件路径为 configs/${{ matrix.version }} ,如：configs/Lean/
             # 文件完整存放路径应为：configs/Lean/x86-64.config 或 configs/Lienol/Newifi3-D2
