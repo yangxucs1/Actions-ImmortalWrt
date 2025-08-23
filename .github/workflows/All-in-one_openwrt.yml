@@ -79,7 +79,7 @@ jobs:
       matrix:
         version: [ "Lean", "Lienol", "immortalwrt" ]
           # 版本维度：三种不同的OpenWRT分支
-        target: [ "x86-64", "Newifi3-D2" ]
+        target: [ "X86-64", "Newifi3-D2" ]
           # 目标设备维度：共有3*2,6种组合
         include:
           - version: Lean
@@ -182,6 +182,7 @@ jobs:
             # 文件路径为 configs/${{ matrix.version }} ,如：configs/Lean/
             # 文件完整存放路径应为：configs/Lean/x86-64.config 或 configs/Lienol/Newifi3-D2
             # 文件名称不要含“/”，如：文件名不能为 “x86/64.config”，而应存为“x86-64.config”
+            # 注意大小写！
 
           if [ -f "$CONFIG_FILE" ]; then
             cat "$CONFIG_FILE" >> openwrt/.config
