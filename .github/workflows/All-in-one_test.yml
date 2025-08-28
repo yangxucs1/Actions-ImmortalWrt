@@ -360,7 +360,6 @@ jobs:
         uses: actions/download-artifact@main
         with:
           path: all-firmwares
-          pattern: firmware-*
           merge-multiple: true
 
       - name: 下载版本信息
