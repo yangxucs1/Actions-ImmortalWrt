@@ -112,7 +112,7 @@ jobs:
               # 将找到的文件路径存入环境变量，供后续步骤使用
             echo "config_exists=true" >> $GITHUB_OUTPUT
           else
-            echo "在 $CONFIG_DIR 中未找到与 ${TARGET_NAME}.config 匹配的文件（忽略大小写），终止流程!""
+            echo "在 $CONFIG_DIR 中未找到与 ${TARGET_NAME}.config 匹配的文件（忽略大小写），终止流程!"
             echo "config_exists=false" >> $GITHUB_OUTPUT
           fi
           
