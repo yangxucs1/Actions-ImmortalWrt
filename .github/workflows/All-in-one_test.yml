@@ -367,7 +367,7 @@ jobs:
         uses: actions/download-artifact@main
         with:
           path: version-info
-          pattern: version_info_*
+          pattern: version_info
           merge-multiple: true
 
       - name: 提取版本和目标信息
