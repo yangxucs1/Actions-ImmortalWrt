@@ -350,7 +350,6 @@ jobs:
         with:
           name: version_info
           path: /workdir/version_target_${{ matrix.version }}_${{ matrix.target }}.txt
-          merge-multiple: true
 
       - name: 设置作业输出
         id: set-outputs
@@ -381,7 +380,6 @@ jobs:
         with:
           path: version-info
           pattern: version_info
-          merge-multiple: true
 
       - name: 提取版本和目标信息
         id: version-info_all
