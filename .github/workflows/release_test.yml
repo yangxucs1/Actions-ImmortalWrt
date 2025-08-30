@@ -13,26 +13,48 @@ jobs:
   release-all:
     name: 合并发布所有固件
     runs-on: ubuntu-latest
-    # 移除对 build 工作流的依赖，直接运行
     if: github.event.repository.owner.id == github.event.sender.id
 
     steps:
-      - name: 下载所有构建产物（复用已有 build 产物）
+      - name: 准备工作目录
+        run: |
+          # 确保目标目录存在，避免后续命令报错
+          mkdir -p all-firmwares
+          mkdir -p version-info-all
+
+      - name: 下载所有构建产物（适配矩阵作业）
         uses: actions/download-artifact@v4
         with:
           path: all-firmwares
-          # 下载仓库中所有未过期的 Artifacts（默认保留90天）
+          # 只下载固件类Artifact（匹配矩阵生成的命名格式）
+          pattern: firmware-*
+          merge-multiple: false  # 保留每个Artifact的独立目录结构
 
-      - name: 下载版本信息
+      - name: 下载版本信息（适配矩阵作业）
         uses: actions/download-artifact@v4
         with:
           path: version-info-all
-          pattern: version_info*
+          # 只下载版本信息类Artifact
+          pattern: version_info-*
+          merge-multiple: false
 
       - name: 检查是否存在构建产物
         run: |
-          if [ -z "$(find all-firmwares -type f)" ]; then
-            echo "错误：未找到任何构建产物，请先确保 build 工作流已成功运行并生成 Artifacts"
+          # 搜索所有子目录中的固件文件（适配矩阵生成的多层结构）
+          FIRMWARE_FILES=$(find all-firmwares -type f \( -name "*.bin" -o -name "*.img" \))
+          if [ -z "$FIRMWARE_FILES" ]; then
+            echo "错误：未找到任何构建产物，请先确保 build 工作流至少有一个矩阵组合成功运行并生成 Artifacts"
+            exit 1
+          else
+            echo "找到以下固件文件："
+            echo "$FIRMWARE_FILES"
+          fi
+
+      - name: 检查是否存在版本信息
+        run: |
+          VERSION_FILES=$(find version-info-all -type f -name "version_target_*.txt")
+          if [ -z "$VERSION_FILES" ]; then
+            echo "错误：未找到版本信息文件，请确保 build 工作流正常生成版本信息"
             exit 1
           fi
 
@@ -45,6 +67,7 @@ jobs:
           VERSIONS=()
           TARGETS=()
           
+          # 遍历所有版本信息文件（适配矩阵生成的路径结构）
           for file in $(find version-info-all -type f -name "version_target_*.txt"); do
             if [ -f "$file" ]; then
               cat "$file" >> version-info-all.txt
@@ -65,18 +88,22 @@ jobs:
       - name: 整理合并固件
         run: |
           mkdir -p final-release
-          find all-firmwares -type f -exec cp {} final-release/ \;
+          # 复制所有固件文件和配置文件（排除中间目录结构）
+          find all-firmwares -type f \( -name "*.bin" -o -name "*.img" -o -name "*.config" -o -name "*build-info.txt" \) -exec cp {} final-release/ \;
           
+          # 合并所有构建信息
           echo "# 所有固件详细信息" > final-release/all-build-info.txt
           echo "==========================================" >> final-release/all-build-info.txt
-          for info_file in $(find all-firmwares -type f -name "*build-info.txt" | grep -v "all-build-info.txt"); do
+          for info_file in $(find final-release -type f -name "*build-info.txt" | grep -v "all-build-info.txt"); do
             if [ -f "$info_file" ]; then
               echo -e "\n$(cat "$info_file")" >> final-release/all-build-info.txt
               echo "==========================================" >> final-release/all-build-info.txt
+              # 删除单个构建信息文件
+              rm -f "$info_file"
             fi
           done
-          find final-release -type f -name "*build-info.txt" -not -name "all-build-info.txt" -delete
           
+          # 生成发布说明
           echo "# OpenWRT 固件汇总发布" > release.txt
           echo "发布时间: $(date +'%Y-%m-%d %H:%M:%S')" >> release.txt
           echo "包含以下版本和设备的固件：" >> release.txt
