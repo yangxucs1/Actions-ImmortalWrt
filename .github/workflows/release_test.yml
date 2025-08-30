@@ -1,36 +1,43 @@
-name: 发布内容测试
-on: workflow_dispatch  # 仅手动触发
+# 用于调试发布流程的独立工作流配置
+name: 调试固件发布流程
+
+permissions: write-all
+
+on:
+  workflow_dispatch:
+    # 允许手动触发以进行调试
+
+env:
+  TZ: Asia/Shanghai
 
 jobs:
-  process-version-info:
+  release-debug:
+    name: 调试合并发布流程
     runs-on: ubuntu-latest
+    if: true  # 始终执行，方便调试
+
     steps:
-      - name: 下载所有版本信息 artifact
+      - name: 下载所有构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: all-firmwares
+          # 注意：调试时需确保存在对应的构建产物artifacts
+
+      - name: 下载版本信息
         uses: actions/download-artifact@v4
         with:
           path: version-info-all
-          pattern: version_info_*  # 精确匹配原工作流中版本信息 artifact 的命名规则（version_info_{版本}_{设备}）
-
-      - name: 强制创建版本信息目录（防止未下载到文件时出错）
-        run: |
-          mkdir -p version-info-all
-
-      - name: 检查版本信息 artifact 下载结果（调试用）
-        run: |
-          echo "===== 版本信息文件列表====="
-          find version-info-all -type f
+          pattern: version_info*
 
       - name: 提取版本和目标信息
         id: extract_version_target
         run: |
-          # 创建合并后的版本信息文件
           echo "所有版本和目标设备信息汇总" > version-info-all.txt
           echo "==========================================" >> version-info-all.txt
           
           VERSIONS=()
           TARGETS=()
           
-          # 遍历版本信息文件（适配下载后的目录结构）
           for file in $(find version-info-all -type f -name "version_target_*.txt"); do
             if [ -f "$file" ]; then
               cat "$file" >> version-info-all.txt
@@ -43,44 +50,74 @@ jobs:
             fi
           done
           
-          # 去重处理
           UNIQUE_VERSIONS=($(printf "%s\n" "${VERSIONS[@]}" | sort -u))
           UNIQUE_TARGETS=($(printf "%s\n" "${TARGETS[@]}" | sort -u))
+          
           echo "versions=${UNIQUE_VERSIONS[*]}" >> $GITHUB_OUTPUT
           echo "targets=${UNIQUE_TARGETS[*]}" >> $GITHUB_OUTPUT
+          # 调试输出
+          echo "提取到的版本: ${UNIQUE_VERSIONS[*]}"
+          echo "提取到的设备: ${UNIQUE_TARGETS[*]}"
 
-      - name: 生成版本信息汇总文件
+      - name: 整理合并固件
         run: |
           mkdir -p final-release
-          # 将合并的版本信息文件复制到输出目录
-          cp version-info-all.txt final-release/version-summary.txt
+          find all-firmwares -type f -exec cp {} final-release/ \;
           
-          # 生成版本信息说明
-          echo "# OpenWRT 版本与设备信息汇总" > release.txt
-          echo "生成时间: $(date +'%Y-%m-%d %H:%M:%S')" >> release.txt
-          echo "包含以下版本和设备：" >> release.txt
+          echo "# 所有固件详细信息" > final-release/all-build-info.txt
+          echo "==========================================" >> final-release/all-build-info.txt
+          
+          for info_file in $(find all-firmwares -type f -name "*build-info.txt" | grep -v "all-build-info.txt"); do
+            if [ -f "$info_file" ]; then
+              echo -e "\n$(cat "$info_file")" >> final-release/all-build-info.txt
+              echo "==========================================" >> final-release/all-build-info.txt
+            fi
+          done
+          
+          find final-release -type f -name "*build-info.txt" -not -name "all-build-info.txt" -delete
+          
+          # 生成release说明
+          echo "# OpenWRT 固件汇总发布 [调试版]" > release.txt
+          echo "发布时间: $(date +'%Y-%m-%d %H:%M:%S')" >> release.txt
+          echo "包含以下版本和设备的固件：" >> release.txt
           echo "- 版本: ${{ steps.extract_version_target.outputs.versions }}" >> release.txt
           echo "- 设备: ${{ steps.extract_version_target.outputs.targets }}" >> release.txt
-          echo -e "\n详细信息请查看 version-summary.txt 文件" >> release.txt
+          echo -e "\n各固件详细信息及MD5请查看 all-build-info.txt 文件" >> release.txt
+          echo -e "\n⚠️ 此为调试版本，请勿用于生产环境" >> release.txt
 
-      - name: 生成发布标签
+      - name: 生成调试用发布标签
         id: tag
         run: |
-          echo "release_tag=openwrt-version-info_$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
+          # 增加随机字符串避免标签冲突
+          RAND_STR=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 6)
+          echo "release_tag=debug-openwrt-all-firmwares_$(date +'%Y%m%d%H%M')_$RAND_STR" >> $GITHUB_OUTPUT
+          echo "生成的标签: ${{ steps.tag.outputs.release_tag }}"
 
-      - name: 发布版本信息
+      - name: 显示最终发布内容（调试用）
+        run: |
+          echo "发布标签: ${{ steps.tag.outputs.release_tag }}"
+          echo "发布说明内容:"
+          cat release.txt
+          echo "最终发布文件列表:"
+          ls -l final-release/
+
+      - name: 发布合并后的Release（调试）
         uses: softprops/action-gh-release@master
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ steps.tag.outputs.release_tag }}
           body_path: release.txt
-          files: final-release/version-summary.txt
+          files: final-release/*
+          draft: true  # 标记为草稿，避免误发布正式版本
+          prerelease: true  # 标记为预发布
 
-      - name: 保留最新3个版本信息Release
+      - name: 清理调试版本（可选）
+        if: false  # 调试时可改为true自动清理
         uses: dev-drprasad/delete-older-releases@v0.3.3
         with:
-          keep_latest: 3
+          keep_latest: 0
           delete_tags: true
+          filter: debug-*  # 只删除调试标签
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
