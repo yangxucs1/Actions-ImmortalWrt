@@ -2,28 +2,24 @@ name: 发布内容测试
 on: workflow_dispatch  # 仅手动触发
 
 jobs:
-  release-all:
+  process-version-info:
     runs-on: ubuntu-latest
     steps:
-      - name: 下载所有构建产物固件 artifact
-        uses: actions/download-artifact@v4
-        with:
-          path: all-firmwares
-          pattern: firmware-* 
-          
-      - name: 下载版本信息
+      - name: 下载所有版本信息 artifact
         uses: actions/download-artifact@v4
         with:
           path: version-info-all
-          pattern: version_info*
+          pattern: version_info_*  # 精确匹配原工作流中版本信息 artifact 的命名规则（version_info_{版本}_{设备}）
 
-      - name: 检查 artifact 是否下载成功
+      - name: 强制创建版本信息目录（防止未下载到文件时出错）
         run: |
-          echo "固件目录结构："
-          ls -R all-firmwares || echo "all-firmwares 目录不存在"
-          echo "版本信息目录结构："
-          ls -R version-info-all || echo "version-info-all 目录不存在"
-          
+          mkdir -p version-info-all
+
+      - name: 检查版本信息 artifact 下载结果（调试用）
+        run: |
+          echo "===== 版本信息文件列表====="
+          find version-info-all -type f
+
       - name: 提取版本和目标信息
         id: extract_version_target
         run: |
@@ -34,13 +30,11 @@ jobs:
           VERSIONS=()
           TARGETS=()
           
-          # 遍历所有版本信息文件并合并内容
+          # 遍历版本信息文件（适配下载后的目录结构）
           for file in $(find version-info-all -type f -name "version_target_*.txt"); do
             if [ -f "$file" ]; then
-              # 将单个文件内容追加到合并文件
               cat "$file" >> version-info-all.txt
               echo "==========================================" >> version-info-all.txt
-              # 提取版本和目标设备信息用于后续处理
               while IFS= read -r line; do
                 IFS=':' read -ra parts <<< "$line"
                 VERSIONS+=("${parts[0]}")
@@ -48,56 +42,42 @@ jobs:
               done < "$file"
             fi
           done
+          
           # 去重处理
           UNIQUE_VERSIONS=($(printf "%s\n" "${VERSIONS[@]}" | sort -u))
           UNIQUE_TARGETS=($(printf "%s\n" "${TARGETS[@]}" | sort -u))
-          # 输出到步骤变量
           echo "versions=${UNIQUE_VERSIONS[*]}" >> $GITHUB_OUTPUT
           echo "targets=${UNIQUE_TARGETS[*]}" >> $GITHUB_OUTPUT
 
-      - name: 整理合并固件
+      - name: 生成版本信息汇总文件
         run: |
           mkdir -p final-release
-          # 复制所有文件到统一目录
-          find all-firmwares -type f -exec cp {} final-release/ \;
-          # 合并所有信息文件为统一的 all-build-info.txt
-          echo "# 所有固件详细信息" > final-release/all-build-info.txt
-          echo "==========================================" >> final-release/all-build-info.txt
-          # 遍历所有信息文件并追加内容
-          for info_file in $(find all-firmwares -type f -name "*build-info.txt" | grep -v "all-build-info.txt"); do
-            if [ -f "$info_file" ]; then
-              echo -e "\n$(cat "$info_file")" >> final-release/all-build-info.txt
-              echo "==========================================" >> final-release/all-build-info.txt
-            fi
-          done
-          # 删除除all-build-info.txt外的其他build-info.txt文件
-          find final-release -type f -name "*build-info.txt" -not -name "all-build-info.txt" -delete
+          # 将合并的版本信息文件复制到输出目录
+          cp version-info-all.txt final-release/version-summary.txt
           
-          
-          #生成release标题
-          echo "# OpenWRT 固件汇总发布" > release.txt
-          echo "发布时间: $(date +'%Y-%m-%d %H:%M:%S')" >> release.txt
-          echo "包含以下版本和设备的固件：" >> release.txt
+          # 生成版本信息说明
+          echo "# OpenWRT 版本与设备信息汇总" > release.txt
+          echo "生成时间: $(date +'%Y-%m-%d %H:%M:%S')" >> release.txt
+          echo "包含以下版本和设备：" >> release.txt
           echo "- 版本: ${{ steps.extract_version_target.outputs.versions }}" >> release.txt
           echo "- 设备: ${{ steps.extract_version_target.outputs.targets }}" >> release.txt
-          echo -e "\n各固件详细信息及MD5请查看 all-build-info.txt 文件" >> release.txt
-          echo -e "\n🌐 默认管理IP: 192.168.123.1" >> release.txt
+          echo -e "\n详细信息请查看 version-summary.txt 文件" >> release.txt
 
-      - name: 生成统一发布标签
+      - name: 生成发布标签
         id: tag
         run: |
-          echo "release_tag=openwrt-all-firmwares_$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
+          echo "release_tag=openwrt-version-info_$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
 
-      - name: 发布合并后的Release
+      - name: 发布版本信息
         uses: softprops/action-gh-release@master
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ steps.tag.outputs.release_tag }}
           body_path: release.txt
-          files: final-release/*
+          files: final-release/version-summary.txt
 
-      - name: 保留最新3个Release
+      - name: 保留最新3个版本信息Release
         uses: dev-drprasad/delete-older-releases@v0.3.3
         with:
           keep_latest: 3
