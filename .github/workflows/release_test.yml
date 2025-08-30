@@ -1,27 +1,97 @@
-# 用于调试发布流程的独立工作流配置
-name: 调试固件发布流程
+name: 调试发布流程
 
-permissions: write-all
+permissions:
+  contents: write
 
 on:
   workflow_dispatch:
-    # 允许手动触发以进行调试
+    inputs:
+      simulate_build:
+        description: "模拟构建成功 (true/false)"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
 
 env:
   TZ: Asia/Shanghai
 
 jobs:
-  release-debug:
-    name: 调试合并发布流程
+  # 模拟构建作业
+  simulate-build:
+    name: 模拟构建过程
     runs-on: ubuntu-latest
-    if: true  # 始终执行，方便调试
+    strategy:
+      matrix:
+        version: ["Lean", "Lienol", "immortalwrt"]
+        target: ["X86-64", "Newifi3-D2"]
+    
+    steps:
+      - name: 检查模拟构建选项
+        id: check_simulate
+        run: |
+          if [ "${{ github.event.inputs.simulate_build }}" = "true" ]; then
+            echo "模拟构建成功"
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "upload_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "模拟构建失败"
+            echo "status=failed" >> $GITHUB_OUTPUT
+            echo "upload_release=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 创建模拟固件文件
+        if: steps.check_simulate.outputs.status == 'success'
+        run: |
+          mkdir -p firmware
+          # 创建模拟固件文件
+          echo "模拟固件内容 - ${{ matrix.version }} ${{ matrix.target }}" > firmware/${{ matrix.version }}_${{ matrix.target }}_simulated.bin
+          # 创建构建信息文件
+          echo "版本: ${{ matrix.version }}" > firmware/${{ matrix.version }}_${{ matrix.target }}_build-info.txt
+          echo "目标设备: ${{ matrix.target }}" >> firmware/${{ matrix.version }}_${{ matrix.target }}_build-info.txt
+          echo "构建时间: $(date)" >> firmware/${{ matrix.version }}_${{ matrix.target }}_build-info.txt
+          echo "MD5: simulated_md5_hash" >> firmware/${{ matrix.version }}_${{ matrix.target }}_build-info.txt
+          # 创建版本信息文件
+          echo "${{ matrix.version }}:${{ matrix.target }}" > version_target_${{ matrix.version }}_${{ matrix.target }}.txt
+
+      - name: 上传模拟构建产物
+        uses: actions/upload-artifact@v4
+        if: steps.check_simulate.outputs.status == 'success'
+        with:
+          name: firmware-${{ matrix.version }}_${{ matrix.target }}_simulated
+          path: firmware/
+
+      - name: 上传版本信息
+        uses: actions/upload-artifact@v4
+        if: steps.check_simulate.outputs.status == 'success'
+        with:
+          name: version_info_${{ matrix.version }}_${{ matrix.target }}
+          path: version_target_${{ matrix.version }}_${{ matrix.target }}.txt
+
+      - name: 设置作业输出
+        run: |
+          echo "upload_release=${{ steps.check_simulate.outputs.upload_release }}" >> $GITHUB_OUTPUT
+
+  # 发布作业 - 与原始流程相同
+  release-all:
+    name: 合并发布所有固件
+    runs-on: ubuntu-latest
+    needs: simulate-build
+    if: |
+      ${{ 
+        always() && 
+        !cancelled() && 
+        contains(join(needs.simulate-build.*.result, ','), 'success') && 
+        needs.simulate-build.outputs.upload_release == 'true' 
+      }}
 
     steps:
       - name: 下载所有构建产物
         uses: actions/download-artifact@v4
         with:
           path: all-firmwares
-          # 注意：调试时需确保存在对应的构建产物artifacts
 
       - name: 下载版本信息
         uses: actions/download-artifact@v4
@@ -32,16 +102,20 @@ jobs:
       - name: 提取版本和目标信息
         id: extract_version_target
         run: |
+          # 创建合并后的版本信息文件
           echo "所有版本和目标设备信息汇总" > version-info-all.txt
           echo "==========================================" >> version-info-all.txt
           
           VERSIONS=()
           TARGETS=()
           
+          # 遍历所有版本信息文件并合并内容
           for file in $(find version-info-all -type f -name "version_target_*.txt"); do
             if [ -f "$file" ]; then
+              # 将单个文件内容追加到合并文件
               cat "$file" >> version-info-all.txt
               echo "==========================================" >> version-info-all.txt
+              # 提取版本和目标设备信息用于后续处理
               while IFS= read -r line; do
                 IFS=':' read -ra parts <<< "$line"
                 VERSIONS+=("${parts[0]}")
@@ -49,59 +123,46 @@ jobs:
               done < "$file"
             fi
           done
-          
+          # 去重处理
           UNIQUE_VERSIONS=($(printf "%s\n" "${VERSIONS[@]}" | sort -u))
           UNIQUE_TARGETS=($(printf "%s\n" "${TARGETS[@]}" | sort -u))
-          
+          # 输出到步骤变量
           echo "versions=${UNIQUE_VERSIONS[*]}" >> $GITHUB_OUTPUT
           echo "targets=${UNIQUE_TARGETS[*]}" >> $GITHUB_OUTPUT
-          # 调试输出
-          echo "提取到的版本: ${UNIQUE_VERSIONS[*]}"
-          echo "提取到的设备: ${UNIQUE_TARGETS[*]}"
 
       - name: 整理合并固件
         run: |
           mkdir -p final-release
+          # 复制所有文件到统一目录
           find all-firmwares -type f -exec cp {} final-release/ \;
-          
+          # 合并所有信息文件为统一的 all-build-info.txt
           echo "# 所有固件详细信息" > final-release/all-build-info.txt
           echo "==========================================" >> final-release/all-build-info.txt
-          
+          # 遍历所有信息文件并追加内容
           for info_file in $(find all-firmwares -type f -name "*build-info.txt" | grep -v "all-build-info.txt"); do
             if [ -f "$info_file" ]; then
               echo -e "\n$(cat "$info_file")" >> final-release/all-build-info.txt
               echo "==========================================" >> final-release/all-build-info.txt
             fi
           done
-          
+          # 删除除all-build-info.txt外的其他build-info.txt文件
           find final-release -type f -name "*build-info.txt" -not -name "all-build-info.txt" -delete
           
-          # 生成release说明
-          echo "# OpenWRT 固件汇总发布 [调试版]" > release.txt
+          # 生成release标题
+          echo "# OpenWRT 模拟固件汇总发布" > release.txt
           echo "发布时间: $(date +'%Y-%m-%d %H:%M:%S')" >> release.txt
-          echo "包含以下版本和设备的固件：" >> release.txt
+          echo "包含以下版本和设备的模拟固件：" >> release.txt
           echo "- 版本: ${{ steps.extract_version_target.outputs.versions }}" >> release.txt
           echo "- 设备: ${{ steps.extract_version_target.outputs.targets }}" >> release.txt
-          echo -e "\n各固件详细信息及MD5请查看 all-build-info.txt 文件" >> release.txt
-          echo -e "\n⚠️ 此为调试版本，请勿用于生产环境" >> release.txt
+          echo -e "\n各固件详细信息请查看 all-build-info.txt 文件" >> release.txt
+          echo -e "\n⚠️ 注意：这是模拟测试发布，不包含真实固件文件" >> release.txt
 
-      - name: 生成调试用发布标签
+      - name: 生成统一发布标签
         id: tag
         run: |
-          # 增加随机字符串避免标签冲突
-          RAND_STR=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 6)
-          echo "release_tag=debug-openwrt-all-firmwares_$(date +'%Y%m%d%H%M')_$RAND_STR" >> $GITHUB_OUTPUT
-          echo "生成的标签: ${{ steps.tag.outputs.release_tag }}"
+          echo "release_tag=test-openwrt-simulated_$(date +'%Y%m%d%H%M')" >> $GITHUB_OUTPUT
 
-      - name: 显示最终发布内容（调试用）
-        run: |
-          echo "发布标签: ${{ steps.tag.outputs.release_tag }}"
-          echo "发布说明内容:"
-          cat release.txt
-          echo "最终发布文件列表:"
-          ls -l final-release/
-
-      - name: 发布合并后的Release（调试）
+      - name: 发布合并后的Release
         uses: softprops/action-gh-release@master
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -109,15 +170,11 @@ jobs:
           tag_name: ${{ steps.tag.outputs.release_tag }}
           body_path: release.txt
           files: final-release/*
-          draft: true  # 标记为草稿，避免误发布正式版本
-          prerelease: true  # 标记为预发布
+          draft: true  # 设置为草稿模式，便于测试
 
-      - name: 清理调试版本（可选）
-        if: false  # 调试时可改为true自动清理
-        uses: dev-drprasad/delete-older-releases@v0.3.3
-        with:
-          keep_latest: 0
-          delete_tags: true
-          filter: debug-*  # 只删除调试标签
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: 显示发布信息
+        run: |
+          echo "发布完成！"
+          echo "标签: ${{ steps.tag.outputs.release_tag }}"
+          echo "包含文件:"
+          find final-release -type f -exec echo "  - {}" \;
