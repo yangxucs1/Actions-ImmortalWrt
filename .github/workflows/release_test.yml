@@ -1,80 +1,54 @@
-name: 独立发布构建产物
+name: 单独运行合并发布所有固件
 
-permissions:
-  contents: write
+permissions: write-all
 
 on:
   workflow_dispatch:
-    inputs:
-      source_workflow_run_id:
-        description: "源构建工作流运行ID（可选，留空自动查找最近成功运行）"
-        required: false
-        default: ""
+    # 仅支持手动触发，确保可以独立运行
 
 env:
   TZ: Asia/Shanghai
 
 jobs:
-  standalone-release:
-    name: 发布已有构建产物
+  release-all:
+    name: 合并发布所有固件
     runs-on: ubuntu-latest
-    
-    steps:
-      - name: 获取源构建工作流运行ID
-        id: get-source-run
-        run: |
-          if [ -n "${{ github.event.inputs.source_workflow_run_id }}" ]; then
-            echo "使用指定的工作流运行ID: ${{ github.event.inputs.source_workflow_run_id }}"
-            echo "source_run_id=${{ github.event.inputs.source_workflow_run_id }}" >> $GITHUB_OUTPUT
-          else
-            echo "自动查找最近成功的多版本 OpenWRT 构建test工作流运行..."
-            
-            # 使用GitHub API查找最近成功的构建运行
-            response=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              "https://api.github.com/repos/${{ github.repository }}/actions/runs?event=workflow_dispatch&status=completed&per_page=20")
-            
-            # 查找名为"多版本 OpenWRT 构建test"的成功运行
-            run_id=$(echo "$response" | jq -r '.workflow_runs[] | select(.name == "多版本 OpenWRT 构建test" and .conclusion == "success") | .id' | head -1)
-            
-            if [ -n "$run_id" ] && [ "$run_id" != "null" ]; then
-              echo "找到最近的成功运行ID: $run_id"
-              echo "source_run_id=$run_id" >> $GITHUB_OUTPUT
-            else
-              echo "错误：没有找到成功的多版本 OpenWRT 构建test工作流运行"
-              exit 1
-            fi
-          fi
+    # 移除对 build 工作流的依赖，直接运行
+    if: github.event.repository.owner.id == github.event.sender.id
 
-      - name: 下载所有构建产物
+    steps:
+      - name: 下载所有构建产物（复用已有 build 产物）
         uses: actions/download-artifact@v4
         with:
-          run-id: ${{ steps.get-source-run.outputs.source_run_id }}
           path: all-firmwares
+          # 下载仓库中所有未过期的 Artifacts（默认保留90天）
 
       - name: 下载版本信息
         uses: actions/download-artifact@v4
         with:
-          run-id: ${{ steps.get-source-run.outputs.source_run_id }}
           path: version-info-all
           pattern: version_info*
+
+      - name: 检查是否存在构建产物
+        run: |
+          if [ -z "$(find all-firmwares -type f)" ]; then
+            echo "错误：未找到任何构建产物，请先确保 build 工作流已成功运行并生成 Artifacts"
+            exit 1
+          fi
 
       - name: 提取版本和目标信息
         id: extract_version_target
         run: |
-          # 创建合并后的版本信息文件
           echo "所有版本和目标设备信息汇总" > version-info-all.txt
           echo "==========================================" >> version-info-all.txt
           
           VERSIONS=()
           TARGETS=()
           
-          # 遍历所有版本信息文件并合并内容
           for file in $(find version-info-all -type f -name "version_target_*.txt"); do
             if [ -f "$file" ]; then
-              # 将单个文件内容追加到合并文件
               cat "$file" >> version-info-all.txt
               echo "==========================================" >> version-info-all.txt
-              # 提取版本和目标设备信息用于后续处理
               while IFS= read -r line; do
                 IFS=':' read -ra parts <<< "$line"
                 VERSIONS+=("${parts[0]}")
@@ -82,35 +56,29 @@ jobs:
               done < "$file"
             fi
           done
-          # 去重处理
+          
           UNIQUE_VERSIONS=($(printf "%s\n" "${VERSIONS[@]}" | sort -u))
           UNIQUE_TARGETS=($(printf "%s\n" "${TARGETS[@]}" | sort -u))
-          # 输出到步骤变量
           echo "versions=${UNIQUE_VERSIONS[*]}" >> $GITHUB_OUTPUT
           echo "targets=${UNIQUE_TARGETS[*]}" >> $GITHUB_OUTPUT
 
       - name: 整理合并固件
         run: |
           mkdir -p final-release
-          # 复制所有文件到统一目录
           find all-firmwares -type f -exec cp {} final-release/ \;
-          # 合并所有信息文件为统一的 all-build-info.txt
+          
           echo "# 所有固件详细信息" > final-release/all-build-info.txt
           echo "==========================================" >> final-release/all-build-info.txt
-          # 遍历所有信息文件并追加内容
           for info_file in $(find all-firmwares -type f -name "*build-info.txt" | grep -v "all-build-info.txt"); do
             if [ -f "$info_file" ]; then
               echo -e "\n$(cat "$info_file")" >> final-release/all-build-info.txt
               echo "==========================================" >> final-release/all-build-info.txt
             fi
           done
-          # 删除除all-build-info.txt外的其他build-info.txt文件
           find final-release -type f -name "*build-info.txt" -not -name "all-build-info.txt" -delete
           
-          #生成release标题
           echo "# OpenWRT 固件汇总发布" > release.txt
           echo "发布时间: $(date +'%Y-%m-%d %H:%M:%S')" >> release.txt
-          echo "基于工作流运行: #${{ steps.get-source-run.outputs.source_run_id }}" >> release.txt
           echo "包含以下版本和设备的固件：" >> release.txt
           echo "- 版本: ${{ steps.extract_version_target.outputs.versions }}" >> release.txt
           echo "- 设备: ${{ steps.extract_version_target.outputs.targets }}" >> release.txt
@@ -120,7 +88,7 @@ jobs:
       - name: 生成统一发布标签
         id: tag
         run: |
-          echo "release_tag=openwrt-all-firmwares_$(date +'%Y%m%d%H%M')" >> $GITHUB_OUTPUT
+          echo "release_tag=openwrt-all-firmwares_$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
 
       - name: 发布合并后的Release
         uses: softprops/action-gh-release@master
@@ -139,9 +107,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 显示发布结果
-        run: |
-          echo "✅ 发布成功完成！"
-          echo "🏷️  发布标签: ${{ steps.tag.outputs.release_tag }}"
-          echo "📦 发布文件数量: $(find final-release -type f | wc -l)"
-          echo "🔗 源工作流运行: #${{ steps.get-source-run.outputs.source_run_id }}"
+      - name: 删除旧的工作流程
+        uses: Mattraks/delete-workflow-runs@main
+        with:
+          retain_days: 0
+          keep_minimum_runs: 3
