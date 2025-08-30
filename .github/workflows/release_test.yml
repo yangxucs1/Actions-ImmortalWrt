@@ -1,141 +1,127 @@
-name: 单独运行合并发布所有固件
+release-all:
+  name: 合并发布所有固件
+  runs-on: ubuntu-latest
+  needs: build
+  if: |
+    ${{ 
+      always() && 
+      !cancelled() && 
+      contains(join(needs.build.*.result, ','), 'success')  && 
+      needs.build.outputs.upload_release == 'true' 
+    }}
 
-permissions: write-all
+  steps:
+    - name: 准备目录（确保目录存在）
+      run: |
+        mkdir -p all-firmwares  # 提前创建目录，避免find报错
+        mkdir -p version-info-all
 
-on:
-  workflow_dispatch:
-    # 仅支持手动触发，确保可以独立运行
+    - name: 下载所有固件产物（精准匹配）
+      uses: actions/download-artifact@v4
+      with:
+        path: all-firmwares
+        pattern: firmware-*  # 只下载固件类Artifact（匹配build上传的名称格式）
+        merge-multiple: false  # 保留每个Artifact的独立目录
 
-env:
-  TZ: Asia/Shanghai
+    - name: 下载版本信息
+      uses: actions/download-artifact@v4
+      with:
+        path: version-info-all
+        pattern: version_info_*  # 精准匹配版本信息Artifact
+        merge-multiple: false
 
-jobs:
-  release-all:
-    name: 合并发布所有固件
-    runs-on: ubuntu-latest
-    if: github.event.repository.owner.id == github.event.sender.id
+    - name: 检查是否存在有效固件文件
+      run: |
+        # 搜索所有子目录中的.bin/.img文件（适配嵌套目录结构）
+        FIRMWARE_FILES=$(find all-firmwares -type f \( -name "*.bin" -o -name "*.img" \))
+        if [ -z "$FIRMWARE_FILES" ]; then
+          echo "错误：未找到任何固件文件（.bin/.img），请检查build作业是否正确生成产物"
+          # 打印目录结构辅助调试
+          echo "当前all-firmwares目录结构："
+          tree all-firmwares
+          exit 1
+        else
+          echo "找到以下固件文件："
+          echo "$FIRMWARE_FILES"
+        fi
 
-    steps:
-      - name: 准备工作目录
-        run: |
-          # 确保目标目录存在，避免后续命令报错
-          mkdir -p all-firmwares
-          mkdir -p version-info-all
-
-      - name: 下载所有构建产物（适配矩阵作业）
-        uses: actions/download-artifact@v4
-        with:
-          path: all-firmwares
-          # 只下载固件类Artifact（匹配矩阵生成的命名格式）
-          pattern: firmware-*
-          merge-multiple: false  # 保留每个Artifact的独立目录结构
-
-      - name: 下载版本信息（适配矩阵作业）
-        uses: actions/download-artifact@v4
-        with:
-          path: version-info-all
-          # 只下载版本信息类Artifact
-          pattern: version_info-*
-          merge-multiple: false
-
-      - name: 检查是否存在构建产物
-        run: |
-          # 搜索所有子目录中的固件文件（适配矩阵生成的多层结构）
-          FIRMWARE_FILES=$(find all-firmwares -type f \( -name "*.bin" -o -name "*.img" \))
-          if [ -z "$FIRMWARE_FILES" ]; then
-            echo "错误：未找到任何构建产物，请先确保 build 工作流至少有一个矩阵组合成功运行并生成 Artifacts"
-            exit 1
-          else
-            echo "找到以下固件文件："
-            echo "$FIRMWARE_FILES"
+    - name: 提取版本和目标信息
+      id: extract_version_target
+      run: |
+        echo "所有版本和目标设备信息汇总" > version-info-all.txt
+        echo "==========================================" >> version-info-all.txt
+        
+        VERSIONS=()
+        TARGETS=()
+        
+        # 遍历版本信息文件（适配嵌套目录）
+        for file in $(find version-info-all -type f -name "version_target_*.txt"); do
+          if [ -f "$file" ]; then
+            cat "$file" >> version-info-all.txt
+            echo "==========================================" >> version-info-all.txt
+            while IFS= read -r line; do
+              IFS=':' read -ra parts <<< "$line"
+              VERSIONS+=("${parts[0]}")
+              TARGETS+=("${parts[1]}")
+            done < "$file"
           fi
+        done
+        
+        UNIQUE_VERSIONS=($(printf "%s\n" "${VERSIONS[@]}" | sort -u))
+        UNIQUE_TARGETS=($(printf "%s\n" "${TARGETS[@]}" | sort -u))
+        echo "versions=${UNIQUE_VERSIONS[*]}" >> $GITHUB_OUTPUT
+        echo "targets=${UNIQUE_TARGETS[*]}" >> $GITHUB_OUTPUT
 
-      - name: 检查是否存在版本信息
-        run: |
-          VERSION_FILES=$(find version-info-all -type f -name "version_target_*.txt")
-          if [ -z "$VERSION_FILES" ]; then
-            echo "错误：未找到版本信息文件，请确保 build 工作流正常生成版本信息"
-            exit 1
+    - name: 整理合并固件
+      run: |
+        mkdir -p final-release
+        # 复制所有固件文件、配置文件和信息文件（排除嵌套目录结构）
+        find all-firmwares -type f \( -name "*.bin" -o -name "*.img" -o -name "*.config" -o -name "*build-info.txt" \) -exec cp {} final-release/ \;
+        
+        # 合并所有构建信息
+        echo "# 所有固件详细信息" > final-release/all-build-info.txt
+        echo "==========================================" >> final-release/all-build-info.txt
+        for info_file in $(find final-release -type f -name "*build-info.txt" | grep -v "all-build-info.txt"); do
+          if [ -f "$info_file" ]; then
+            echo -e "\n$(cat "$info_file")" >> final-release/all-build-info.txt
+            echo "==========================================" >> final-release/all-build-info.txt
+            rm -f "$info_file"  # 删除单个信息文件
           fi
+        done
+        
+        # 生成发布说明
+        echo "# OpenWRT 固件汇总发布" > release.txt
+        echo "发布时间: $(date +'%Y-%m-%d %H:%M:%S')" >> release.txt
+        echo "包含以下版本和设备的固件：" >> release.txt
+        echo "- 版本: ${{ steps.extract_version_target.outputs.versions }}" >> release.txt
+        echo "- 设备: ${{ steps.extract_version_target.outputs.targets }}" >> release.txt
+        echo -e "\n各固件详细信息及MD5请查看 all-build-info.txt 文件" >> release.txt
+        echo -e "\n🌐 默认管理IP: 192.168.123.1" >> release.txt
 
-      - name: 提取版本和目标信息
-        id: extract_version_target
-        run: |
-          echo "所有版本和目标设备信息汇总" > version-info-all.txt
-          echo "==========================================" >> version-info-all.txt
-          
-          VERSIONS=()
-          TARGETS=()
-          
-          # 遍历所有版本信息文件（适配矩阵生成的路径结构）
-          for file in $(find version-info-all -type f -name "version_target_*.txt"); do
-            if [ -f "$file" ]; then
-              cat "$file" >> version-info-all.txt
-              echo "==========================================" >> version-info-all.txt
-              while IFS= read -r line; do
-                IFS=':' read -ra parts <<< "$line"
-                VERSIONS+=("${parts[0]}")
-                TARGETS+=("${parts[1]}")
-              done < "$file"
-            fi
-          done
-          
-          UNIQUE_VERSIONS=($(printf "%s\n" "${VERSIONS[@]}" | sort -u))
-          UNIQUE_TARGETS=($(printf "%s\n" "${TARGETS[@]}" | sort -u))
-          echo "versions=${UNIQUE_VERSIONS[*]}" >> $GITHUB_OUTPUT
-          echo "targets=${UNIQUE_TARGETS[*]}" >> $GITHUB_OUTPUT
+    - name: 生成统一发布标签
+      id: tag
+      run: |
+        echo "release_tag=openwrt-all-firmwares_$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
 
-      - name: 整理合并固件
-        run: |
-          mkdir -p final-release
-          # 复制所有固件文件和配置文件（排除中间目录结构）
-          find all-firmwares -type f \( -name "*.bin" -o -name "*.img" -o -name "*.config" -o -name "*build-info.txt" \) -exec cp {} final-release/ \;
-          
-          # 合并所有构建信息
-          echo "# 所有固件详细信息" > final-release/all-build-info.txt
-          echo "==========================================" >> final-release/all-build-info.txt
-          for info_file in $(find final-release -type f -name "*build-info.txt" | grep -v "all-build-info.txt"); do
-            if [ -f "$info_file" ]; then
-              echo -e "\n$(cat "$info_file")" >> final-release/all-build-info.txt
-              echo "==========================================" >> final-release/all-build-info.txt
-              # 删除单个构建信息文件
-              rm -f "$info_file"
-            fi
-          done
-          
-          # 生成发布说明
-          echo "# OpenWRT 固件汇总发布" > release.txt
-          echo "发布时间: $(date +'%Y-%m-%d %H:%M:%S')" >> release.txt
-          echo "包含以下版本和设备的固件：" >> release.txt
-          echo "- 版本: ${{ steps.extract_version_target.outputs.versions }}" >> release.txt
-          echo "- 设备: ${{ steps.extract_version_target.outputs.targets }}" >> release.txt
-          echo -e "\n各固件详细信息及MD5请查看 all-build-info.txt 文件" >> release.txt
-          echo -e "\n🌐 默认管理IP: 192.168.123.1" >> release.txt
+    - name: 发布合并后的Release
+      uses: softprops/action-gh-release@master
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.tag.outputs.release_tag }}
+        body_path: release.txt
+        files: final-release/*
 
-      - name: 生成统一发布标签
-        id: tag
-        run: |
-          echo "release_tag=openwrt-all-firmwares_$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
+    - name: 保留最新3个Release
+      uses: dev-drprasad/delete-older-releases@v0.3.3
+      with:
+        keep_latest: 3
+        delete_tags: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 发布合并后的Release
-        uses: softprops/action-gh-release@master
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.tag.outputs.release_tag }}
-          body_path: release.txt
-          files: final-release/*
-
-      - name: 保留最新3个Release
-        uses: dev-drprasad/delete-older-releases@v0.3.3
-        with:
-          keep_latest: 3
-          delete_tags: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 删除旧的工作流程
-        uses: Mattraks/delete-workflow-runs@main
-        with:
-          retain_days: 0
-          keep_minimum_runs: 3
+    - name: 删除旧的工作流程
+      uses: Mattraks/delete-workflow-runs@main
+      with:
+        retain_days: 0
+        keep_minimum_runs: 3
