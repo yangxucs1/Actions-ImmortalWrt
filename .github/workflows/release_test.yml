@@ -1,15 +1,29 @@
-name: 单独发布固件
+name: 发布内容测试
 on: workflow_dispatch  # 仅手动触发
 
 jobs:
   release-all:
     runs-on: ubuntu-latest
     steps:
+      - name: 下载所有构建产物固件 artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: all-firmwares
+          pattern: firmware-* 
+          
       - name: 下载版本信息
         uses: actions/download-artifact@v4
         with:
           path: version-info-all
           pattern: version_info*
+
+      - name: 检查 artifact 是否下载成功
+        run: |
+          echo "固件目录结构："
+          ls -R all-firmwares || echo "all-firmwares 目录不存在"
+          echo "版本信息目录结构："
+          ls -R version-info-all || echo "version-info-all 目录不存在"
+          
       - name: 提取版本和目标信息
         id: extract_version_target
         run: |
@@ -82,3 +96,11 @@ jobs:
           tag_name: ${{ steps.tag.outputs.release_tag }}
           body_path: release.txt
           files: final-release/*
+
+      - name: 保留最新3个Release
+        uses: dev-drprasad/delete-older-releases@v0.3.3
+        with:
+          keep_latest: 3
+          delete_tags: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
