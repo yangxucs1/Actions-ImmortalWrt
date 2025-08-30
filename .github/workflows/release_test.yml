@@ -1,4 +1,4 @@
-name: 调试发布流程
+name: 独立发布构建产物
 
 permissions:
   contents: write
@@ -6,96 +6,55 @@ permissions:
 on:
   workflow_dispatch:
     inputs:
-      simulate_build:
-        description: "模拟构建成功 (true/false)"
-        required: true
-        default: "true"
-        type: choice
-        options:
-          - "true"
-          - "false"
+      source_workflow_run_id:
+        description: "源构建工作流运行ID（可选，留空自动查找最近成功运行）"
+        required: false
+        default: ""
 
 env:
   TZ: Asia/Shanghai
 
 jobs:
-  # 模拟构建作业
-  simulate-build:
-    name: 模拟构建过程
+  standalone-release:
+    name: 发布已有构建产物
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        version: ["Lean", "Lienol", "immortalwrt"]
-        target: ["X86-64", "Newifi3-D2"]
     
     steps:
-      - name: 检查模拟构建选项
-        id: check_simulate
+      - name: 获取源构建工作流运行ID
+        id: get-source-run
         run: |
-          if [ "${{ github.event.inputs.simulate_build }}" = "true" ]; then
-            echo "模拟构建成功"
-            echo "status=success" >> $GITHUB_OUTPUT
-            echo "upload_release=true" >> $GITHUB_OUTPUT
+          if [ -n "${{ github.event.inputs.source_workflow_run_id }}" ]; then
+            echo "使用指定的工作流运行ID: ${{ github.event.inputs.source_workflow_run_id }}"
+            echo "source_run_id=${{ github.event.inputs.source_workflow_run_id }}" >> $GITHUB_OUTPUT
           else
-            echo "模拟构建失败"
-            echo "status=failed" >> $GITHUB_OUTPUT
-            echo "upload_release=false" >> $GITHUB_OUTPUT
+            echo "自动查找最近成功的多版本 OpenWRT 构建test工作流运行..."
+            
+            # 使用GitHub API查找最近成功的构建运行
+            response=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/runs?event=workflow_dispatch&status=completed&per_page=20")
+            
+            # 查找名为"多版本 OpenWRT 构建test"的成功运行
+            run_id=$(echo "$response" | jq -r '.workflow_runs[] | select(.name == "多版本 OpenWRT 构建test" and .conclusion == "success") | .id' | head -1)
+            
+            if [ -n "$run_id" ] && [ "$run_id" != "null" ]; then
+              echo "找到最近的成功运行ID: $run_id"
+              echo "source_run_id=$run_id" >> $GITHUB_OUTPUT
+            else
+              echo "错误：没有找到成功的多版本 OpenWRT 构建test工作流运行"
+              exit 1
+            fi
           fi
 
-      - name: 创建模拟固件文件
-        if: steps.check_simulate.outputs.status == 'success'
-        run: |
-          mkdir -p firmware
-          # 创建模拟固件文件
-          echo "模拟固件内容 - ${{ matrix.version }} ${{ matrix.target }}" > firmware/${{ matrix.version }}_${{ matrix.target }}_simulated.bin
-          # 创建构建信息文件
-          echo "版本: ${{ matrix.version }}" > firmware/${{ matrix.version }}_${{ matrix.target }}_build-info.txt
-          echo "目标设备: ${{ matrix.target }}" >> firmware/${{ matrix.version }}_${{ matrix.target }}_build-info.txt
-          echo "构建时间: $(date)" >> firmware/${{ matrix.version }}_${{ matrix.target }}_build-info.txt
-          echo "MD5: simulated_md5_hash" >> firmware/${{ matrix.version }}_${{ matrix.target }}_build-info.txt
-          # 创建版本信息文件
-          echo "${{ matrix.version }}:${{ matrix.target }}" > version_target_${{ matrix.version }}_${{ matrix.target }}.txt
-
-      - name: 上传模拟构建产物
-        uses: actions/upload-artifact@v4
-        if: steps.check_simulate.outputs.status == 'success'
-        with:
-          name: firmware-${{ matrix.version }}_${{ matrix.target }}_simulated
-          path: firmware/
-
-      - name: 上传版本信息
-        uses: actions/upload-artifact@v4
-        if: steps.check_simulate.outputs.status == 'success'
-        with:
-          name: version_info_${{ matrix.version }}_${{ matrix.target }}
-          path: version_target_${{ matrix.version }}_${{ matrix.target }}.txt
-
-      - name: 设置作业输出
-        run: |
-          echo "upload_release=${{ steps.check_simulate.outputs.upload_release }}" >> $GITHUB_OUTPUT
-
-  # 发布作业 - 与原始流程相同
-  release-all:
-    name: 合并发布所有固件
-    runs-on: ubuntu-latest
-    needs: simulate-build
-    if: |
-      ${{ 
-        always() && 
-        !cancelled() && 
-        contains(join(needs.simulate-build.*.result, ','), 'success') && 
-        needs.simulate-build.outputs.upload_release == 'true' 
-      }}
-
-    steps:
       - name: 下载所有构建产物
         uses: actions/download-artifact@v4
         with:
+          run-id: ${{ steps.get-source-run.outputs.source_run_id }}
           path: all-firmwares
 
       - name: 下载版本信息
         uses: actions/download-artifact@v4
         with:
+          run-id: ${{ steps.get-source-run.outputs.source_run_id }}
           path: version-info-all
           pattern: version_info*
 
@@ -148,19 +107,20 @@ jobs:
           # 删除除all-build-info.txt外的其他build-info.txt文件
           find final-release -type f -name "*build-info.txt" -not -name "all-build-info.txt" -delete
           
-          # 生成release标题
-          echo "# OpenWRT 模拟固件汇总发布" > release.txt
+          #生成release标题
+          echo "# OpenWRT 固件汇总发布" > release.txt
           echo "发布时间: $(date +'%Y-%m-%d %H:%M:%S')" >> release.txt
-          echo "包含以下版本和设备的模拟固件：" >> release.txt
+          echo "基于工作流运行: #${{ steps.get-source-run.outputs.source_run_id }}" >> release.txt
+          echo "包含以下版本和设备的固件：" >> release.txt
           echo "- 版本: ${{ steps.extract_version_target.outputs.versions }}" >> release.txt
           echo "- 设备: ${{ steps.extract_version_target.outputs.targets }}" >> release.txt
-          echo -e "\n各固件详细信息请查看 all-build-info.txt 文件" >> release.txt
-          echo -e "\n⚠️ 注意：这是模拟测试发布，不包含真实固件文件" >> release.txt
+          echo -e "\n各固件详细信息及MD5请查看 all-build-info.txt 文件" >> release.txt
+          echo -e "\n🌐 默认管理IP: 192.168.123.1" >> release.txt
 
       - name: 生成统一发布标签
         id: tag
         run: |
-          echo "release_tag=test-openwrt-simulated_$(date +'%Y%m%d%H%M')" >> $GITHUB_OUTPUT
+          echo "release_tag=openwrt-all-firmwares_$(date +'%Y%m%d%H%M')" >> $GITHUB_OUTPUT
 
       - name: 发布合并后的Release
         uses: softprops/action-gh-release@master
@@ -170,11 +130,18 @@ jobs:
           tag_name: ${{ steps.tag.outputs.release_tag }}
           body_path: release.txt
           files: final-release/*
-          draft: true  # 设置为草稿模式，便于测试
 
-      - name: 显示发布信息
+      - name: 保留最新3个Release
+        uses: dev-drprasad/delete-older-releases@v0.3.3
+        with:
+          keep_latest: 3
+          delete_tags: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 显示发布结果
         run: |
-          echo "发布完成！"
-          echo "标签: ${{ steps.tag.outputs.release_tag }}"
-          echo "包含文件:"
-          find final-release -type f -exec echo "  - {}" \;
+          echo "✅ 发布成功完成！"
+          echo "🏷️  发布标签: ${{ steps.tag.outputs.release_tag }}"
+          echo "📦 发布文件数量: $(find final-release -type f | wc -l)"
+          echo "🔗 源工作流运行: #${{ steps.get-source-run.outputs.source_run_id }}"
