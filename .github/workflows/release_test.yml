@@ -1,313 +1,30 @@
 #
-# Description: Build OpenWRT using GitHub Actions
+# Description: 单独的 OpenWRT 固件合并发布流程
 #
-# Copyright (c) 2019-2024 P3TERX <https://p3terx.com>
-#
-# This is free software, licensed under the MIT License.
-# See /LICENSE for more information.
-#
-
-name: 多版本 OpenWRT 构建test
+name: 单独合并发布所有固件
 
 permissions: write-all
-  # 开启写权限，防止无法上传到release
 
 on:
-  repository_dispatch:
   workflow_dispatch:
-    inputs:
-      enable_ssh:           
-        description: "启用SSH调试 (true/false)"
-        required: true
-        default: "false"
-        type: choice
-        options:
-          - "true"
-          - "false"
-      action:
-        description: "操作类型 (build: 正常构建, build-nocache: 清理缓存构建)"
-        required: true
-        default: "build"
-        type: choice
-        options:
-          - build
-          - build-nocache
+    # 仅支持手动触发
 
 env:
-  ENV_SH: scripts/environment.sh
-  PACKAGES_SH: scripts/packages.sh
-  SETTINGS_SH: scripts/init-settings.sh
-  CLASH_CORE_SH: scripts/preset-clash-core-amd64.sh
-  UPLOAD_BIN_DIR: true
-  UPLOAD_FIRMWARE: true
-  UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
+    # 设置时区
 
 jobs:
-  build:
-    name: 构建 ${{ matrix.version }} - ${{ matrix.target }}
-    runs-on: ubuntu-latest
-    if: github.event.repository.owner.id == github.event.sender.id
-    strategy:
-      fail-fast: false
-      matrix:
-        version: [ "Lean", "Lienol", "immortalwrt" ]
-        target: [ "X86-64", "Newifi3-D2" ]
-        include:
-          - version: Lean
-            repo_url: https://github.com/coolsnowwolf/lede.git
-            branch: master
-          - version: Lienol
-            repo_url: https://github.com/Lienol/openwrt.git
-            branch: main
-          - version: immortalwrt
-            repo_url: https://github.com/immortalwrt/immortalwrt.git
-            branch: master
-
-    steps:
-      - name: 准备
-        uses: actions/checkout@main
-
-      - name: 检查配置文件是否存在
-        id: check_config
-        run: |
-          CONFIG_DIR="configs/${{ matrix.version }}"
-          TARGET_NAME="${{ matrix.target }}"
-          MATCHED_FILE=$(find "$CONFIG_DIR" -maxdepth 1 -type f -iname "${TARGET_NAME}.config" | head -n 1)
-          
-          if [ -f "$MATCHED_FILE" ]; then
-            echo "找到匹配的配置文件: $MATCHED_FILE"
-            echo "CONFIG_FILE=$MATCHED_FILE" >> $GITHUB_ENV
-            echo "config_exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "在 $CONFIG_DIR 中未找到与 ${TARGET_NAME}.config 匹配的文件，终止流程!"
-            echo "config_exists=false" >> $GITHUB_OUTPUT
-          fi
-          
-      - name: 终止不存在配置文件的流程
-        if: steps.check_config.outputs.config_exists == 'false'
-        run: |
-          echo "配置文件不存在，终止工作流"
-          exit 1
-
-      - name: 清理磁盘空间(Ubuntu)
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-
-      - name: 初始化编译环境
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          sudo -E apt-get -qq update -y
-          sudo -E apt-get -qq full-upgrade -y
-          chmod +x $ENV_SH && $ENV_SH
-          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          sudo docker image prune -a -f
-          sudo docker container prune -f
-          sudo -E apt-get -qq autoremove --purge
-          sudo -E apt-get -qq clean
-          sudo timedatectl set-timezone "$TZ"
-          sudo mkdir -p /workdir
-          sudo chown $USER:$GROUPS /workdir
-
-      - name: 检查磁盘空间
-        if: (!cancelled())
-        run: df -hT
-
-      - name: 克隆源代码
-        working-directory: /workdir
-        if: steps.check_config.outputs.config_exists == 'true'
-        run: |
-          echo "从 ${{ matrix.version }} 克隆 ${{ matrix.branch }} 分支..."
-          git clone --depth=1 -b ${{ matrix.branch }} ${{ matrix.repo_url }} openwrt
-          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
-
-      - name: 设置版本环境变量
-        run: |
-          if [ "${{ matrix.version }}" = "Lean" ]; then
-            echo "VERSION=lede-master" >> $GITHUB_ENV
-          elif [ "${{ matrix.version }}" = "Lienol" ]; then
-            echo "VERSION=lienol-24.10" >> $GITHUB_ENV
-          elif [ "${{ matrix.version }}" = "immortalwrt" ]; then
-            echo "VERSION=immortalwrt-master" >> $GITHUB_ENV
-          fi
-
-      - name: 添加自定义软件仓库
-        run: |
-          cd openwrt
-          chmod +x $GITHUB_WORKSPACE/$PACKAGES_SH && $GITHUB_WORKSPACE/$PACKAGES_SH        
-
-      - name: 更新 feeds
-        run: |
-          cd openwrt
-          ./scripts/feeds update -a
-
-      - name: 安装软件包前删除可能冲突的插件
-        run: |
-          cd openwrt
-          rm -rf feeds/smpackage/{base-files,dnsmasq,firewall*,fullconenat,libnftnl,nftables,ppp,opkg,ucl,upx,vsftpd*,miniupnpd-iptables,wireless-regdb}
-
-      - name: 安装 feeds 软件包
-        run: |
-          cd openwrt
-          ./scripts/feeds install -a
-
-      - name: 执行自定义设置
-        run: |
-          [ -d files ] && mv files openwrt/files || echo "files 目录不存在"
-          [ -f ${{ env.CONFIG_FILE }} ] && cat ${{ env.CONFIG_FILE }} >> openwrt/.config
-
-          cd openwrt
-          chmod +x $GITHUB_WORKSPACE/$SETTINGS_SH && $GITHUB_WORKSPACE/$SETTINGS_SH
-          chmod +x $GITHUB_WORKSPACE/$CLASH_CORE_SH && $GITHUB_WORKSPACE/$CLASH_CORE_SH
-
-      - name: SSH远程连接服务器在线配置固件
-        id: ssh
-        uses: mxschmitt/action-tmate@v3
-        with:
-          limit-access-to-actor: false
-        if: ${{ github.event.inputs.enable_ssh == 'true' }}
-
-      - name: 下载编译依赖软件包
-        id: download-dl
-        run: |
-          cd openwrt
-          make defconfig
-          make download -j$(($(nproc)+1))
-          find dl -size -1024c -exec ls -l {} \;
-          find dl -size -1024c -exec rm -f {} \;
-          make download -j$(($(nproc)+1))
-
-      - name: 开启缓存
-        uses: stupidloud/cachewrtbuild@main
-        with:
-          ccache: 'true'
-          mixkey: ${{ matrix.version }}-${{ matrix.target }}
-          clean: ${{ contains(github.event.action, 'nocache') }}
-          prefix: ${{ github.workspace }}/openwrt
-
-      - name: 检查磁盘空间
-        if: (!cancelled())
-        run: df -hT
-
-      - name: 开始编译固件
-        id: compile
-        run: |
-          cd openwrt
-          echo -e "$(($(nproc)+1)) 线程编译"
-          if make -j$(($(nproc) + 1)) ; then
-            echo "编译成功"
-            echo "status=success" >> $GITHUB_OUTPUT
-          else
-            echo "编译失败，尝试单线程编译..."
-            if make -j1 V=s ; then
-              echo "单线程编译成功"
-              echo "status=success" >> $GITHUB_OUTPUT
-            else
-              echo "编译失败"
-              echo "status=failed" >> $GITHUB_OUTPUT
-            fi 
-          fi
-
-          grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/^CONFIG_TARGET_(.*)_DEVICE_(.*)=y/\1-\2/'  > DEVICE_NAME
-          [ -s DEVICE_NAME ] && echo "DEVICE_NAME=$(cat DEVICE_NAME)" >> $GITHUB_ENV
-          echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
-
-      - name: 检查磁盘空间
-        if: (!cancelled())
-        run: df -hT
-
-      - name: 整理固件文件夹
-        working-directory: /workdir
-        id: organize
-        if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
-        run: |
-          mkdir -p firmware
-          cd openwrt/bin/targets/*/*/
-          TARGET_PLATFORM=$(basename $(dirname $(pwd)))
-          echo "当前目标平台: $TARGET_PLATFORM"     
-
-          shopt -s nullglob    
-          shopt -s nocasematch 
-          
-          if [[ "$TARGET_PLATFORM" == x86* ]]; then
-            for file in *combined* *sysupgrade*; do
-            [ -f "$file" ] && mv "$file" "/workdir/firmware/${{ matrix.version }}_$file"
-            done
-          else
-            for file in *squashfs*.bin; do
-            [ -f "$file" ] && mv "$file" "/workdir/firmware/${{ matrix.version }}_$file"
-            done
-          fi
-          
-          cd /workdir/firmware
-          INFO_FILE="${{ matrix.version }}_${{matrix.target}}_build-info.txt"
-          printf "版本: ${{ matrix.version }}\n目标设备: ${{ matrix.target }}\n构建时间: $(date)\n\n文件MD5校验和:\n" > "$INFO_FILE"
-          for file in *; do
-            if [ -f "$file" ] && [ "$file" != "$INFO_FILE" ]; then
-              md5=$(md5sum "$file" | awk '{print $1}')
-              echo "$md5  $file" >> "$INFO_FILE"
-            fi
-          done
-          
-          cp /workdir/openwrt/.config  ./${{ matrix.version }}_${{matrix.target}}.config 2>/dev/null || true
-          
-          echo "FIRMWARE=$PWD" >> $GITHUB_ENV
-          echo "status=success" >> $GITHUB_OUTPUT
-
-      - name: 上传构建产物
-        uses: actions/upload-artifact@v4
-        if: steps.organize.outputs.status == 'success' && !cancelled()
-        with:
-          name: firmware-${{ matrix.version }}_${{ matrix.target }}_${{ env.FILE_DATE }}
-          path: ${{ env.FIRMWARE }}
-
-      - name: 保存版本和目标信息
-        working-directory: /workdir
-        if: steps.organize.outputs.status == 'success'
-        run: |
-          echo "${{ matrix.version }}:${{ env.DEVICE_NAME }}" >> version_target_${{ matrix.version }}_${{ matrix.target }}.txt
-
-      - name: 上传版本信息
-        uses: actions/upload-artifact@v4
-        with:
-          name: version_info_${{ matrix.version }}_${{ matrix.target }}
-          path: /workdir/version_target_${{ matrix.version }}_${{ matrix.target }}.txt
-
-      - name: 设置作业输出
-        id: set-outputs
-        run: |
-          echo "upload_release=${{ env.UPLOAD_RELEASE }}" >> $GITHUB_OUTPUT
-
   release-all:
     name: 合并发布所有固件
     runs-on: ubuntu-latest
-    needs: build
-    if: |
-      ${{ 
-        always() && 
-        !cancelled() && 
-        contains(join(needs.build.*.result, ','), 'success')  && 
-        needs.build.outputs.upload_release == 'true' 
-      }}
+    if: github.event.repository.owner.id == github.event.sender.id
 
     steps:
-      - name: 准备目录（确保目录存在）
-        run: |
-          mkdir -p all-firmwares
-          mkdir -p version-info-all
-
-      - name: 下载所有固件产物（精准匹配）
+      - name: 下载所有构建产物
         uses: actions/download-artifact@v4
         with:
           path: all-firmwares
+          # 下载所有名称匹配 firmware-* 的 artifact
           pattern: firmware-*
           merge-multiple: false
 
@@ -315,38 +32,26 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: version-info-all
-          pattern: version_info_*
+          pattern: version_info*
           merge-multiple: false
-
-      - name: 检查是否存在有效固件文件
-        run: |
-          # 搜索所有子目录中的.bin/.img文件（适配嵌套目录结构）
-          FIRMWARE_FILES=$(find all-firmwares -type f \( -name "*.bin" -o -name "*.img" \))
-          if [ -z "$FIRMWARE_FILES" ]; then
-            echo "错误：未找到任何固件文件（.bin/.img），请检查build作业是否正确生成产物"
-            # 打印目录结构辅助调试
-            echo "当前all-firmwares目录结构："
-            tree all-firmwares
-            exit 1
-          else
-            echo "找到以下固件文件："
-            echo "$FIRMWARE_FILES"
-          fi
 
       - name: 提取版本和目标信息
         id: extract_version_target
         run: |
+          # 创建合并后的版本信息文件
           echo "所有版本和目标设备信息汇总" > version-info-all.txt
           echo "==========================================" >> version-info-all.txt
           
           VERSIONS=()
           TARGETS=()
           
-          # 遍历版本信息文件（适配嵌套目录）
+          # 遍历所有版本信息文件并合并内容
           for file in $(find version-info-all -type f -name "version_target_*.txt"); do
             if [ -f "$file" ]; then
+              # 将单个文件内容追加到合并文件
               cat "$file" >> version-info-all.txt
               echo "==========================================" >> version-info-all.txt
+              # 提取版本和目标设备信息用于后续处理
               while IFS= read -r line; do
                 IFS=':' read -ra parts <<< "$line"
                 VERSIONS+=("${parts[0]}")
@@ -354,30 +59,32 @@ jobs:
               done < "$file"
             fi
           done
-          
+          # 去重处理
           UNIQUE_VERSIONS=($(printf "%s\n" "${VERSIONS[@]}" | sort -u))
           UNIQUE_TARGETS=($(printf "%s\n" "${TARGETS[@]}" | sort -u))
+          # 输出到步骤变量
           echo "versions=${UNIQUE_VERSIONS[*]}" >> $GITHUB_OUTPUT
           echo "targets=${UNIQUE_TARGETS[*]}" >> $GITHUB_OUTPUT
 
       - name: 整理合并固件
         run: |
           mkdir -p final-release
-          # 复制所有固件文件、配置文件和信息文件（排除嵌套目录结构）
-          find all-firmwares -type f \( -name "*.bin" -o -name "*.img" -o -name "*.config" -o -name "*build-info.txt" \) -exec cp {} final-release/ \;
-          
-          # 合并所有构建信息
+          # 复制所有文件到统一目录
+          find all-firmwares -type f -exec cp {} final-release/ \;
+          # 合并所有信息文件为统一的 all-build-info.txt
           echo "# 所有固件详细信息" > final-release/all-build-info.txt
           echo "==========================================" >> final-release/all-build-info.txt
-          for info_file in $(find final-release -type f -name "*build-info.txt" | grep -v "all-build-info.txt"); do
+          # 遍历所有信息文件并追加内容
+          for info_file in $(find all-firmwares -type f -name "*build-info.txt" | grep -v "all-build-info.txt"); do
             if [ -f "$info_file" ]; then
               echo -e "\n$(cat "$info_file")" >> final-release/all-build-info.txt
               echo "==========================================" >> final-release/all-build-info.txt
-              rm -f "$info_file"  # 删除单个信息文件
             fi
           done
+          # 删除除all-build-info.txt外的其他build-info.txt文件
+          find final-release -type f -name "*build-info.txt" -not -name "all-build-info.txt" -delete
           
-          # 生成发布说明
+          # 生成release标题
           echo "# OpenWRT 固件汇总发布" > release.txt
           echo "发布时间: $(date +'%Y-%m-%d %H:%M:%S')" >> release.txt
           echo "包含以下版本和设备的固件：" >> release.txt
